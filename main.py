@@ -266,9 +266,9 @@ async def handle_message_async(event: P2ImMessageReceiveV1):
 
 async def _run_and_display(
     user_id: str, chat_id: str, is_group: bool,
-    text: str, card_msg_id: str, session, notify_msg_id: str,
+    text: str, card_id: str, card_msg_id: str, session, notify_msg_id: str,
 ):
-    """调用 Claude 并流式展示结果，检测选项时附加按钮。消息处理和按钮回复共用此函数。"""
+    """调用 Claude 并通过 CardKit 流式卡片展示结果。"""
     active_run = _active_runs.start_run(user_id, card_msg_id)
 
     accumulated = ""
@@ -277,15 +277,18 @@ async def _run_and_display(
     plan_exited = False  # Claude 调了 ExitPlanMode
     last_push_time = 0.0
     push_failures = 0
-    _PUSH_INTERVAL = 0.4
+    _PUSH_INTERVAL = 0.08
     _MAX_STREAM_DISPLAY = 2500
+    _stream_seq = 0
+    _STREAM_ELEMENT_ID = "md_stream"
 
     async def push(content: str):
-        nonlocal push_failures
+        nonlocal push_failures, _stream_seq
         if push_failures >= 3:
             return
         try:
-            await feishu.update_card(card_msg_id, content)
+            _stream_seq += 1
+            await feishu.stream_update_text(card_id, _STREAM_ELEMENT_ID, content, _stream_seq)
             push_failures = 0
         except Exception as push_err:
             push_failures += 1
@@ -375,7 +378,7 @@ async def _run_and_display(
     finally:
         _active_runs.clear_run(user_id, active_run)
 
-    # 最终更新卡片，检测选项时附加按钮
+    # 关闭流式模式，追加最终内容和按钮
     # AskUserQuestion 的内容在 accumulated 里，full_text 可能不含，需要兜底
     final = full_text or accumulated or "（无输出）"
     if used_fresh_session_fallback:
@@ -386,19 +389,22 @@ async def _run_and_display(
     options = _extract_options(final) or ask_options
     card_patched = False
     try:
+        # 最终一次流式推送（完整内容）
+        _stream_seq += 1
+        await feishu.stream_update_text(card_id, _STREAM_ELEMENT_ID, final, _stream_seq)
+        # 关闭流式模式
+        await feishu.finish_streaming(card_id, sequence=_stream_seq + 1)
+        # 追加按钮（如有）
         if options:
             buttons = [
                 {"text": display, "value": {"reply": value, "cid": chat_id}}
                 for display, value in options
             ]
-            # 短选项(Y/N等)横排，长选项竖排
             short = all(len(b["text"]) <= 10 for b in buttons)
-            await feishu.update_card_with_buttons(card_msg_id, final, buttons, flow=short)
-        else:
-            await feishu.update_card(card_msg_id, final)
+            await feishu.streaming_add_buttons(card_id, buttons, flow=short)
         card_patched = True
     except Exception as e:
-        print(f"[error] 卡片更新失败，回退发文本: {e}", flush=True)
+        print(f"[error] CardKit 最终更新失败，回退发文本: {e}", flush=True)
         try:
             if is_group and notify_msg_id:
                 await feishu.reply_card(notify_msg_id, content=final, loading=False)
@@ -517,13 +523,15 @@ async def _process_message(user_id: str, chat_id: str, is_group: bool, msg):
     session = await store.get_current(user_id, chat_id)
     print(f"[Claude] session={session.session_id} model={session.model}", flush=True)
 
-    # 1. 发送"思考中"占位卡片，拿到 message_id
+    # 1. 创建 CardKit 流式卡片
     try:
         if is_group:
-            card_msg_id = await feishu.reply_card(msg.message_id, loading=True)
+            card_id, card_msg_id = await feishu.create_streaming_card(
+                message_id=msg.message_id, element_id="md_stream")
         else:
-            card_msg_id = await feishu.send_card_to_user(user_id, loading=True)
-        print(f"[卡片] card_msg_id={card_msg_id}", flush=True)
+            card_id, card_msg_id = await feishu.create_streaming_card(
+                open_id=user_id, element_id="md_stream")
+        print(f"[CardKit] card_id={card_id} card_msg_id={card_msg_id}", flush=True)
     except Exception as e:
         print(f"[error] 发送占位卡片失败: {e}", flush=True)
         if is_group:
@@ -535,7 +543,7 @@ async def _process_message(user_id: str, chat_id: str, is_group: bool, msg):
             await feishu.send_text_to_user(user_id, f"❌ 发送消息失败：{e}")
         return
 
-    await _run_and_display(user_id, chat_id, is_group, text, card_msg_id, session, msg.message_id)
+    await _run_and_display(user_id, chat_id, is_group, text, card_id, card_msg_id, session, msg.message_id)
 
 
 def _extract_options(text: str) -> list[tuple[str, str]]:
@@ -758,15 +766,17 @@ async def _handle_button_reply(user_id: str, chat_id: str, text: str, clicked_ms
             session = await store.get_current(user_id, chat_id)
             try:
                 if is_group and clicked_msg_id:
-                    card_msg_id = await feishu.reply_card(clicked_msg_id, loading=True)
+                    card_id, card_msg_id = await feishu.create_streaming_card(
+                        message_id=clicked_msg_id, element_id="md_stream")
                 else:
-                    card_msg_id = await feishu.send_card_to_user(user_id, loading=True)
+                    card_id, card_msg_id = await feishu.create_streaming_card(
+                        open_id=user_id, element_id="md_stream")
             except Exception as e:
                 print(f"[error] 按钮回复占位卡片失败: {e}", flush=True)
                 return
             await _run_and_display(
                 user_id, chat_id, is_group, text,
-                card_msg_id, session, clicked_msg_id or "",
+                card_id, card_msg_id, session, clicked_msg_id or "",
             )
         except Exception as e:
             print(f"[error] 按钮回复处理异常: {type(e).__name__}: {e}", flush=True)

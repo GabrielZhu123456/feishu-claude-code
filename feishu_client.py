@@ -1,6 +1,6 @@
 """
 飞书 API 异步封装。
-流式方案：发送内联卡片消息 → 用 patch 逐步更新内容（比 cardkit 流式卡片更简单可靠）。
+流式方案：CardKit 流式卡片（打字机效果）+ PATCH 兜底。
 """
 
 import asyncio
@@ -294,6 +294,193 @@ class FeishuClient:
                 raise RuntimeError(f"patch 卡片失败: {resp.code} {resp.msg}")
 
         await self._retry_with_backoff(_update, max_retries=3)
+
+    # ── CardKit 流式卡片 ──────────────────────────────────────
+
+    async def create_streaming_card(self, open_id: str = None, message_id: str = None,
+                                     element_id: str = "md_stream") -> tuple[str, str]:
+        """
+        创建 CardKit 流式卡片并发送。返回 (card_id, message_id)。
+        open_id 模式：主动发送给用户。message_id 模式：回复消息。
+        """
+        from lark_oapi.api.cardkit.v1.model import (
+            CreateCardRequest, CreateCardRequestBody,
+        )
+
+        card_json = json.dumps({
+            "schema": "2.0",
+            "config": {
+                "streaming_mode": True,
+                "streaming_config": {
+                    "print_frequency_ms": {"default": 50},
+                    "print_step": {"default": 2},
+                    "print_strategy": "fast",
+                },
+            },
+            "body": {"elements": [
+                {"tag": "markdown", "element_id": element_id, "content": "⏳ 思考中..."},
+            ]},
+        }, ensure_ascii=False)
+
+        # Step 1: 创建卡片实体
+        async def _create():
+            req = (
+                CreateCardRequest.builder()
+                .request_body(
+                    CreateCardRequestBody.builder()
+                    .type("card_json")
+                    .data(card_json)
+                    .build()
+                )
+                .build()
+            )
+            resp = await self.client.cardkit.v1.card.acreate(req)
+            if not resp.success():
+                raise RuntimeError(f"创建流式卡片失败: {resp.code} {resp.msg}")
+            return resp.data.card_id
+
+        card_id = await self._retry_with_backoff(_create, max_retries=2)
+
+        # Step 2: 通过消息 API 发送卡片实体
+        card_ref = json.dumps({"type": "card", "data": {"card_id": card_id}}, ensure_ascii=False)
+
+        if message_id:
+            # 回复模式
+            msg_id = await self._retry_with_backoff(lambda: self._reply_card_entity(message_id, card_ref), max_retries=2)
+        else:
+            # 主动发送模式
+            msg_id = await self._retry_with_backoff(lambda: self._send_card_entity(open_id, card_ref), max_retries=2)
+
+        return card_id, msg_id
+
+    async def _send_card_entity(self, open_id: str, card_ref: str) -> str:
+        req = (
+            CreateMessageRequest.builder()
+            .receive_id_type("open_id")
+            .request_body(
+                CreateMessageRequestBody.builder()
+                .receive_id(open_id)
+                .msg_type("interactive")
+                .content(card_ref)
+                .build()
+            )
+            .build()
+        )
+        resp = await self.client.im.v1.message.acreate(req)
+        if not resp.success():
+            raise RuntimeError(f"发送卡片实体失败: {resp.code} {resp.msg}")
+        return resp.data.message_id
+
+    async def _reply_card_entity(self, message_id: str, card_ref: str) -> str:
+        req = (
+            ReplyMessageRequest.builder()
+            .message_id(message_id)
+            .request_body(
+                ReplyMessageRequestBody.builder()
+                .msg_type("interactive")
+                .content(card_ref)
+                .build()
+            )
+            .build()
+        )
+        resp = await self.client.im.v1.message.areply(req)
+        if not resp.success():
+            raise RuntimeError(f"回复卡片实体失败: {resp.code} {resp.msg}")
+        return resp.data.message_id
+
+    async def stream_update_text(self, card_id: str, element_id: str, content: str, sequence: int):
+        """流式更新卡片文本（传全量文本 + 递增 sequence，客户端自动打字机效果）"""
+        from lark_oapi.api.cardkit.v1.model import (
+            ContentCardElementRequest, ContentCardElementRequestBody,
+        )
+
+        async def _update():
+            req = (
+                ContentCardElementRequest.builder()
+                .card_id(card_id)
+                .element_id(element_id)
+                .request_body(
+                    ContentCardElementRequestBody.builder()
+                    .content(content)
+                    .sequence(sequence)
+                    .build()
+                )
+                .build()
+            )
+            resp = await self.client.cardkit.v1.card_element.acontent(req)
+            if not resp.success():
+                raise RuntimeError(f"流式更新失败: {resp.code} {resp.msg}")
+
+        await self._retry_with_backoff(_update, max_retries=1)
+
+    async def finish_streaming(self, card_id: str, sequence: int = 999):
+        """关闭流式模式，恢复按钮交互和转发"""
+        from lark_oapi.api.cardkit.v1.model import (
+            SettingsCardRequest, SettingsCardRequestBody,
+        )
+
+        settings_json = json.dumps({"streaming_mode": False})
+
+        async def _finish():
+            req = (
+                SettingsCardRequest.builder()
+                .card_id(card_id)
+                .request_body(
+                    SettingsCardRequestBody.builder()
+                    .settings(settings_json)
+                    .sequence(sequence)
+                    .build()
+                )
+                .build()
+            )
+            resp = await self.client.cardkit.v1.card.asettings(req)
+            if not resp.success():
+                raise RuntimeError(f"关闭流式模式失败: {resp.code} {resp.msg}")
+
+        await self._retry_with_backoff(_finish, max_retries=2)
+
+    async def streaming_add_buttons(self, card_id: str, buttons: list[dict], flow: bool = False):
+        """流式结束后追加按钮元素"""
+        from lark_oapi.api.cardkit.v1.model import (
+            CreateCardElementRequest, CreateCardElementRequestBody,
+        )
+
+        btn_elements = []
+        for i, btn in enumerate(buttons):
+            btn_elements.append({
+                "tag": "button",
+                "text": {"tag": "plain_text", "content": btn["text"]},
+                "type": "default",
+                "size": "small",
+                "name": f"btn_{i}",
+                "value": btn["value"],
+                "behaviors": [{"type": "callback", "value": btn["value"]}],
+            })
+
+        if flow and btn_elements:
+            element = {"tag": "column_set", "flex_mode": "flow",
+                       "columns": [{"tag": "column", "width": "auto", "elements": [b]} for b in btn_elements]}
+        else:
+            element = btn_elements[0] if len(btn_elements) == 1 else {"tag": "column_set", "flex_mode": "flow",
+                       "columns": [{"tag": "column", "width": "auto", "elements": [b]} for b in btn_elements]}
+            # 多按钮时用 column_set flow
+
+        async def _add():
+            req = (
+                CreateCardElementRequest.builder()
+                .card_id(card_id)
+                .request_body(
+                    CreateCardElementRequestBody.builder()
+                    .element(json.dumps(element, ensure_ascii=False))
+                    .build()
+                )
+                .build()
+            )
+            resp = await self.client.cardkit.v1.card_element.acreate(req)
+            if not resp.success():
+                raise RuntimeError(f"添加按钮失败: {resp.code} {resp.msg}")
+
+        await self._retry_with_backoff(_add, max_retries=2)
 
     async def reply_text(self, message_id: str, text: str) -> str:
         """回复纯文本消息（触发通知）"""
