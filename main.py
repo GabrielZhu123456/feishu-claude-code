@@ -519,6 +519,19 @@ async def _process_message(user_id: str, chat_id: str, is_group: bool, msg):
             return
         # reply is None → 不是 bot 命令，当作普通消息（含 /xxx）转发给 Claude
 
+    # --- Agent OS 消息路由（Patch 1-3）---
+    try:
+        from message_router import route_message
+        routed = route_message(text, user_id)
+        if routed is not None:
+            if is_group:
+                await feishu.reply_card(msg.message_id, content=routed, loading=False)
+            else:
+                await feishu.send_card_to_user(user_id, content=routed, loading=False)
+            return
+    except Exception as e:
+        print(f"[route_error] 消息路由异常，降级到 Claude CLI: {e}", flush=True)
+
     # ── 普通消息 → 调用 Claude ──────────────────────────────
     session = await store.get_current(user_id, chat_id)
     print(f"[Claude] session={session.session_id} model={session.model}", flush=True)
