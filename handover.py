@@ -20,7 +20,7 @@ CLAUDE_PROJECTS_DIR = os.path.expanduser("~/.claude/projects")
 HANDOVER_URL = "http://localhost:9981/handover"
 
 
-def _find_session(fingerprint: str) -> tuple[str, str] | None:
+def _find_session(fingerprint: str) -> "tuple[str, str] | None":
     """在所有项目目录的 .jsonl 中搜索指纹文本。返回 (session_id, cwd) 或 None"""
     try:
         result = subprocess.run(

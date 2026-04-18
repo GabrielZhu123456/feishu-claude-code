@@ -50,7 +50,7 @@ async def _maybe_await(result):
 async def stop_run(
     registry: ActiveRunRegistry,
     user_id: str,
-    on_stopped: Optional[Callable[[ActiveRun], Awaitable[None] | None]] = None,
+    on_stopped: Optional[Callable[[ActiveRun], "Awaitable[None] | None"]] = None,
     grace_seconds: float = 2.0,
 ) -> bool:
     active_run = registry.get_run(user_id)

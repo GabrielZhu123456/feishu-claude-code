@@ -91,7 +91,7 @@ BOT_COMMANDS = {
 }
 
 
-async def _build_session_list(user_id: str, chat_id: str, store: SessionStore, cli_all: list[dict] | None = None) -> list[dict]:
+async def _build_session_list(user_id: str, chat_id: str, store: SessionStore, cli_all: "list[dict] | None" = None) -> "list[dict]":
     """构建合并、去重、排序后的 session 列表（不含当前 session）。
     /resume 列表展示和 /resume N 选择都用这一个函数，保证索引一致。"""
     cur_sid = (await store.get_current_raw(user_id, chat_id)).get("session_id")
