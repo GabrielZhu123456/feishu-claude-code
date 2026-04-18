@@ -1,5 +1,5 @@
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Awaitable, Callable, Optional
 
 
@@ -7,14 +7,14 @@ from typing import Awaitable, Callable, Optional
 class ActiveRun:
     user_id: str
     card_msg_id: str
-    proc: object | None = None
+    proc: Optional[object] = None
     stop_requested: bool = False
     stop_announced: bool = False
 
 
 class ActiveRunRegistry:
     def __init__(self):
-        self._runs: dict[str, ActiveRun] = {}
+        self._runs: dict = {}
 
     def start_run(self, user_id: str, card_msg_id: str) -> ActiveRun:
         active_run = ActiveRun(user_id=user_id, card_msg_id=card_msg_id)
@@ -50,7 +50,7 @@ async def _maybe_await(result):
 async def stop_run(
     registry: ActiveRunRegistry,
     user_id: str,
-    on_stopped: Optional[Callable[[ActiveRun], "Awaitable[None] | None"]] = None,
+    on_stopped: Optional[Callable] = None,
     grace_seconds: float = 2.0,
 ) -> bool:
     active_run = registry.get_run(user_id)
