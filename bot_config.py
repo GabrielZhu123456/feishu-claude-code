@@ -2,7 +2,7 @@ import os
 import shutil
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(override=True)
 
 FEISHU_APP_ID = os.environ["FEISHU_APP_ID"]
 FEISHU_APP_SECRET = os.environ["FEISHU_APP_SECRET"]
