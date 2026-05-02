@@ -365,6 +365,27 @@ async def _run_and_display(
             on_process_start=lambda proc: _active_runs.attach_process(user_id, proc),
         )
         print(f"[run_claude] 完成, session={new_session_id}", flush=True)
+
+        # M2: CLI→inbox 同步写入（ADR-002 §2.3）
+        try:
+            from message_router import classify_message
+            from task_creator import create_local_task
+            m2_intent, m2_ttype, m2_tid = classify_message(claude_msg)
+            m2_structured = ("approve", "reject", "pause_task", "resume_task",
+                            "escalate", "confirm", "run_task", "dispatch_agent")
+            if m2_intent in m2_structured:
+                m2_risk = "L2" if m2_intent in ("approve", "reject", "escalate") else "L1"
+                m2_result = create_local_task(
+                    action=f"[M2 sync] {claude_msg[:200]}",
+                    intent=m2_intent,
+                    risk_level=m2_risk,
+                    session_id=new_session_id or session.session_id,
+                    source=user_id,
+                )
+                if m2_result.get("ok"):
+                    print(f"[M2] synced to inbox: {m2_result['task_id']} intent={m2_intent}", flush=True)
+        except Exception as m2_err:
+            print(f"[M2] sync error (non-fatal): {m2_err}", flush=True)
     except Exception as e:
         if active_run.stop_requested:
             return
