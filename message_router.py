@@ -1,14 +1,17 @@
-"""message_router.py - 移动端传话筒模式：所有消息写入 command_inbox
+"""message_router.py - 兼容层：手机端消息路由（将在 M2 CLI→inbox 能力就绪后降级）
 
-角色定义（SPEC Mobile Messenger v1.1）：
-  - xiaohongshu_comments 是输入代理（传话筒），不是执行者
-  - 只写 command_inbox，不直接查表/建任务/回复执行结果
-  - 统一回复"已收到，指令已提交处理"
+⚠️ 兼容层：此文件将在 M2 后降级为 fallback-only。
+  新代码不得增加新的路由逻辑，任务创建请使用 task_creator.py。
+
+角色定义（ADR-001 过渡期）：
+  - 所有消息统一走 CLI（route_message 返回 None）
+  - structured command 兼容写入 command_inbox 作为 fallback
+  - 新 intent（run_task/call_skill/dispatch_agent）仅服务于兼容期旧链路写表
 
 使用方式:
   from message_router import route_message
   reply = route_message(text, user_open_id)
-  # reply = "已收到，指令已提交处理。" 或 错误消息
+  # reply = None（直通 CLI）或 兼容层回复
 """
 import hashlib
 import os
@@ -59,6 +62,10 @@ INTENT_KEYWORDS = {
         "帮助", "你能做什么", "指令", "help", "命令", "你会什么",
         "能做什么", "功能",
     ],
+    # ADR-002: 仅服务于兼容期旧链路写表和 CLI 内部协议映射
+    "run_task": ["跑任务", "执行任务", "run task"],
+    "call_skill": ["调用技能", "使用技能", "call skill"],
+    "dispatch_agent": ["派发任务", "分发任务", "dispatch"],
 }
 
 # 疑问句模式（语义兜底用）
@@ -226,6 +233,11 @@ def _write_command(text: str, user_id: str, intent: str,
         "dedupe_key": dedupe_key,
         "needs_clarification": intent == "other",
         "human_summary": f"{intent}: {text[:60]}",
+        # ADR-002 protocol fields
+        "execution_scope": "local",
+        "risk_level": "L0",
+        "session_id": "",
+        "requires_confirmation": False,
     }
     rid = bitable.create_record(COMMAND_TABLE_ID, fields)
     if rid:
