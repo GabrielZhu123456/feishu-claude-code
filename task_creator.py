@@ -27,7 +27,10 @@ from message_router import LightBitable, _get_bitable, TASK_APP_TOKEN
 
 RISK_REQUIRES_CONFIRMATION = {"L0": False, "L1": False, "L2": True, "L3": True}
 
-VALID_INTENTS = ("run_task", "call_skill", "dispatch_agent")
+VALID_INTENTS = ("run_task", "call_skill", "dispatch_agent",
+                 "approve", "reject", "pause_task", "resume_task",
+                 "escalate", "confirm", "query_status", "query_pending",
+                 "add_comment", "help")
 VALID_RISK_LEVELS = ("L0", "L1", "L2", "L3")
 
 
