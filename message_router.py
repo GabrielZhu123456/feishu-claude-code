@@ -248,29 +248,35 @@ def _write_command(text: str, user_id: str, intent: str,
     return bool(rid)
 
 
+# ── Feature flag ──
+
+CLI_ONLY_MODE = os.environ.get("CLI_ONLY_MODE", "false").lower() == "true"
+
+
 # ── 主路由入口 ──
 
 
 def route_message(text: str, user_open_id: str):
-    """传话筒模式：所有消息写入 command_inbox。
+    """直通 CLI 过渡模式（ADR-001 M1）。
+
+    所有消息始终走 CLI（return None），不再拦截回复。
+    过渡期：structured command 兼容写入 command_inbox 作为 fallback。
 
     Returns:
-      str: 回复文本（已提交 / 错误提示）
-      None: 降级到 Claude CLI（仅 command_inbox 表不可用时）
+      None: 始终直通 CLI（消息不拦截）
     """
-    if not TASK_APP_TOKEN:
-        return None  # 表未配置，降级到 Claude CLI
+    if CLI_ONLY_MODE:
+        return None  # 最终形态：完全直通 CLI
 
-    intent, target_type, target_id = classify_message(text)
-    logger.info("[route] text=%s → intent=%s target=%s",
-                text[:60], intent, target_type)
+    # 过渡模式：CLI 为主，structured command 兜底
+    if TASK_APP_TOKEN:
+        intent, target_type, target_id = classify_message(text)
+        logger.info("[route] text=%s → intent=%s target=%s (transitional)",
+                    text[:60], intent, target_type)
 
-    ok = _write_command(text, user_open_id, intent, target_type, target_id)
-    if ok:
-        if intent == "other":
-            return "已收到，指令已提交处理。如需更精确的操作，可以告诉我具体要做什么（如：查状态、批准、暂停等）。"
-        return "已收到，指令已提交处理。"
-    else:
-        # 写入失败，降级到 Claude CLI
-        logger.warning("[route] command write failed, falling back to Claude CLI")
-        return None
+        structured_intents = ("approve", "reject", "pause_task",
+                              "resume_task", "escalate")
+        if intent in structured_intents:
+            _write_command(text, user_open_id, intent, target_type, target_id)
+
+    return None  # 消息本身始终走 CLI
