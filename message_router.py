@@ -58,6 +58,9 @@ INTENT_KEYWORDS = {
     "escalate": [
         "紧急", "尽快", "马上", "优先", "加急", "escalate", "很急",
     ],
+    "confirm": [
+        "确认", "confirm", "已确认", "确认完成", "ok确认",
+    ],
     "help": [
         "帮助", "你能做什么", "指令", "help", "命令", "你会什么",
         "能做什么", "功能",
@@ -275,7 +278,7 @@ def route_message(text: str, user_open_id: str):
                     text[:60], intent, target_type)
 
         structured_intents = ("approve", "reject", "pause_task",
-                              "resume_task", "escalate")
+                              "resume_task", "escalate", "confirm")
         if intent in structured_intents:
             _write_command(text, user_open_id, intent, target_type, target_id)
 
