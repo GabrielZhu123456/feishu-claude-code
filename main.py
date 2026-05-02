@@ -367,6 +367,8 @@ async def _run_and_display(
         print(f"[run_claude] 完成, session={new_session_id}", flush=True)
 
         # M2: CLI→inbox 同步写入（ADR-002 §2.3）
+        # CLI 已处理此消息，写入仅作追踪记录（fallback_only=true），
+        # 不让 coordinator 重复执行
         try:
             from message_router import classify_message
             from task_creator import create_local_task
@@ -381,6 +383,7 @@ async def _run_and_display(
                     risk_level=m2_risk,
                     session_id=new_session_id or session.session_id,
                     source=user_id,
+                    parameters={"fallback_only": True},
                 )
                 if m2_result.get("ok"):
                     print(f"[M2] synced to inbox: {m2_result['task_id']} intent={m2_intent}", flush=True)
