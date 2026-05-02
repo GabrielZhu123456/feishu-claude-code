@@ -277,22 +277,32 @@ async def _run_and_display(
     plan_exited = False  # Claude 调了 ExitPlanMode
     last_push_time = 0.0
     push_failures = 0
-    _PUSH_INTERVAL = 0.08
+    _PUSH_INTERVAL = 0.3
     _MAX_STREAM_DISPLAY = 2500
     _stream_seq = 0
     _STREAM_ELEMENT_ID = "md_stream"
+    _pending_pushes: list = []  # track fire-and-forget tasks
 
     async def push(content: str):
         nonlocal push_failures, _stream_seq
         if push_failures >= 3:
             return
-        try:
-            _stream_seq += 1
-            await feishu.stream_update_text(card_id, _STREAM_ELEMENT_ID, content, _stream_seq)
-            push_failures = 0
-        except Exception as push_err:
-            push_failures += 1
-            print(f"[warn] push 失败 ({push_failures}/3): {push_err}", flush=True)
+        _stream_seq += 1
+        seq = _stream_seq
+
+        async def _do_push():
+            nonlocal push_failures
+            try:
+                await feishu.stream_update_text(card_id, _STREAM_ELEMENT_ID, content, seq)
+                push_failures = 0
+            except Exception as push_err:
+                push_failures += 1
+                print(f"[warn] push 失败 ({push_failures}/3): {push_err}", flush=True)
+
+        # Fire-and-forget: don't await, let it run in background
+        task = asyncio.create_task(_do_push())
+        _pending_pushes.append(task)
+        task.add_done_callback(lambda t: _pending_pushes.remove(t) if t in _pending_pushes else None)
 
     def _build_display() -> str:
         parts = []
