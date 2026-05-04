@@ -34,6 +34,7 @@ from run_control import ActiveRun, ActiveRunRegistry, stop_run
 # ── 看门狗：定时重启防止 WebSocket 假死 ──────────────────────
 
 MAX_UPTIME = 4 * 3600   # 最长运行 4 小时后主动重启
+IDLE_RESTART = 30 * 60  # 30 分钟无事件，主动重启防止 WebSocket 假死
 _start_time = time.time()
 _last_event = time.time()
 
@@ -47,6 +48,10 @@ def _watchdog():
 
         if uptime > MAX_UPTIME:
             print(f"[watchdog] 运行 {uptime/3600:.1f}h，定时重启刷新连接", flush=True)
+            os._exit(0)
+
+        if idle > IDLE_RESTART:
+            print(f"[watchdog] idle {idle/60:.0f}min 超过阈值 {IDLE_RESTART/60:.0f}min，重启防止假死", flush=True)
             os._exit(0)
 
         print(f"[watchdog] uptime={uptime/3600:.1f}h idle={idle/60:.0f}min", flush=True)
